@@ -47,28 +47,28 @@ const navItems = [
     testId: "nav-financeiro",
   },
   {
-    label: "Conteúdo",
-    icon: Image,
-    href: "/conteudo",
-    testId: "nav-conteudo",
-  },
-  {
     label: "Operacional",
     icon: ClipboardList,
     href: "/operacional",
     testId: "nav-operacional",
   },
   {
-    label: "RH",
-    icon: UserCog,
-    href: "/rh",
-    testId: "nav-rh",
+    label: "Conteúdo",
+    icon: Image,
+    href: "/conteudo",
+    testId: "nav-conteudo",
   },
   {
     label: "WhatsApp",
     icon: MessageCircle,
     href: "/whatsapp",
     testId: "nav-whatsapp",
+  },
+  {
+    label: "RH",
+    icon: UserCog,
+    href: "/rh",
+    testId: "nav-rh",
   },
   {
     label: "Configurações",
