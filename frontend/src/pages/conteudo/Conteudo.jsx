@@ -273,6 +273,31 @@ export default function Conteudo() {
     toast.error(msg);
   }, []);
 
+  // ---------- Generic agent job polling ----------
+  const pollAgentJob = useCallback((jobId, onDone, onError, maxAttempts = 60) => {
+    let attempts = 0;
+    const poll = async () => {
+      if (attempts >= maxAttempts) {
+        onError("A etapa excedeu o tempo máximo. Tente novamente.");
+        return;
+      }
+      attempts++;
+      try {
+        const res = await axios.get(`${API}/carousel/agent-job/${jobId}`, { headers: getAuthHeader() });
+        if (res.data.status === "done") {
+          onDone(res.data.result);
+        } else if (res.data.status === "error") {
+          onError(res.data.error || "Erro no agente. Tente novamente.");
+        } else {
+          setTimeout(poll, 3000);
+        }
+      } catch (e) {
+        onError(e.response?.data?.detail || e.message || "Erro ao verificar status");
+      }
+    };
+    setTimeout(poll, 2000);
+  }, []);
+
   // ---------- Agents ----------
   const runAgent1 = async () => {
     if (!selectedClientId) return;
@@ -282,9 +307,19 @@ export default function Conteudo() {
       const res = await axios.post(`${API}/carousel/agent/news`, {
         client_id: selectedClientId, period_days: periodDays, llm_provider: agent1Provider,
       }, { headers: getAuthHeader() });
-      setNewsContext(res.data.news_context);
-      setNewsInfo({ name: res.data.client_name, niche: res.data.niche });
-      setStep("agent1_done");
+      pollAgentJob(
+        res.data.job_id,
+        (result) => {
+          setNewsContext(result.news_context);
+          setNewsInfo({ name: result.client_name, niche: result.niche });
+          setStep("agent1_done");
+        },
+        (errMsg) => {
+          setError(errMsg);
+          toast.error(errMsg);
+          setStep("setup");
+        }
+      );
     } catch (e) {
       handleApiError(e);
       setStep("setup");
@@ -298,9 +333,19 @@ export default function Conteudo() {
       const res = await axios.post(`${API}/carousel/agent/themes`, {
         client_id: selectedClientId, news_context: newsContext, llm_provider: llmProvider,
       }, { headers: getAuthHeader() });
-      setThemes(res.data.themes || []);
-      setSelectedTheme(null);
-      setStep("agent2_done");
+      pollAgentJob(
+        res.data.job_id,
+        (result) => {
+          setThemes(result.themes || []);
+          setSelectedTheme(null);
+          setStep("agent2_done");
+        },
+        (errMsg) => {
+          setError(errMsg);
+          toast.error(errMsg);
+          setStep("agent1_done");
+        }
+      );
     } catch (e) {
       handleApiError(e);
       setStep("agent1_done");
@@ -317,8 +362,18 @@ export default function Conteudo() {
         client_id: selectedClientId, chosen_theme: themeText,
         news_context: newsContext, llm_provider: llmProvider,
       }, { headers: getAuthHeader() });
-      setCopyData(res.data.copy);
-      setStep("agent3_done");
+      pollAgentJob(
+        res.data.job_id,
+        (result) => {
+          setCopyData(result.copy);
+          setStep("agent3_done");
+        },
+        (errMsg) => {
+          setError(errMsg);
+          toast.error(errMsg);
+          setStep("agent2_done");
+        }
+      );
     } catch (e) {
       handleApiError(e);
       setStep("agent2_done");

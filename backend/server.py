@@ -1894,6 +1894,38 @@ def _extract_json(text: str):
     raise ValueError("JSON válido não encontrado na resposta do LLM")
 
 
+async def _run_agent_job(job_id: str, coro):
+    """Executa qualquer etapa do agente em background e salva no MongoDB."""
+    try:
+        result = await coro
+        await db.carousel_agent_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "done", "result": result, "completed_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    except HTTPException as exc:
+        await db.carousel_agent_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "error", "error": exc.detail}},
+        )
+    except Exception as exc:
+        await db.carousel_agent_jobs.update_one(
+            {"job_id": job_id},
+            {"$set": {"status": "error", "error": str(exc)[:500]}},
+        )
+
+
+@api_router.get("/carousel/agent-job/{job_id}")
+async def get_carousel_agent_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    """Polling endpoint para qualquer etapa do agente (news/themes/copy)."""
+    job = await db.carousel_agent_jobs.find_one(
+        {"job_id": job_id, "user_id": current_user["user_id"]},
+        {"_id": 0, "job_id": 1, "step": 1, "status": 1, "result": 1, "error": 1},
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado")
+    return job
+
+
 @api_router.post("/carousel/agent/news")
 async def carousel_agent_news(body: CarouselNewsRequest, current_user: dict = Depends(get_current_user)):
     api_key = await _get_api_key(current_user["user_id"], body.llm_provider)
@@ -1902,6 +1934,8 @@ async def carousel_agent_news(body: CarouselNewsRequest, current_user: dict = De
         raise HTTPException(status_code=404, detail="Cliente não encontrado")
     niche = client.get("company") or client.get("name", "marketing digital")
     notes = client.get("notes", "")
+    client_name = client.get("name", "")
+
     prompt = (
         f"Pesquise as notícias e tendências mais relevantes dos últimos {body.period_days} dias para:\n"
         f"Segmento/Empresa: {niche}\n"
@@ -1909,16 +1943,28 @@ async def carousel_agent_news(body: CarouselNewsRequest, current_user: dict = De
         f"Forneça: 1) 5-7 notícias/tendências recentes com título e descrição curta. "
         f"2) Principais tópicos em alta no setor. 3) Oportunidades de conteúdo para Instagram."
     )
-    if body.llm_provider == "perplexity":
-        result = await call_perplexity(api_key, prompt)
-    else:
-        system = (
-            "Você é um pesquisador especializado em tendências de marketing digital e comportamento do consumidor brasileiro. "
-            "Analise as tendências, notícias e oportunidades de conteúdo do setor solicitado com base no seu conhecimento. "
-            "Responda sempre em português brasileiro com informações práticas e acionáveis."
-        )
-        result = await call_llm(body.llm_provider, api_key, system, prompt)
-    return {"news_context": result, "client_name": client.get("name"), "niche": niche}
+
+    job_id = f"agentjob_{uuid.uuid4().hex[:12]}"
+    await db.carousel_agent_jobs.insert_one({
+        "job_id": job_id, "user_id": current_user["user_id"], "step": "news",
+        "status": "pending", "result": None, "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _run():
+        if body.llm_provider == "perplexity":
+            text = await call_perplexity(api_key, prompt)
+        else:
+            system = (
+                "Você é um pesquisador especializado em tendências de marketing digital e comportamento do consumidor brasileiro. "
+                "Analise as tendências, notícias e oportunidades de conteúdo do setor solicitado com base no seu conhecimento. "
+                "Responda sempre em português brasileiro com informações práticas e acionáveis."
+            )
+            text = await call_llm(body.llm_provider, api_key, system, prompt)
+        return {"news_context": text, "client_name": client_name, "niche": niche}
+
+    asyncio.create_task(_run_agent_job(job_id, _run()))
+    return {"job_id": job_id, "status": "pending"}
 
 
 @api_router.post("/carousel/agent/themes")
@@ -1926,6 +1972,7 @@ async def carousel_agent_themes(body: CarouselThemesRequest, current_user: dict 
     api_key = await _get_api_key(current_user["user_id"], body.llm_provider)
     client = await db.clients.find_one({"client_id": body.client_id}, {"_id": 0})
     niche = ((client.get("company") or client.get("name", "negócio")) if client else "negócio")
+
     system = "Você é um estrategista de conteúdo sênior para Instagram. Crie temas de alta performance. Responda em português brasileiro."
     prompt = (
         f"Com base nas tendências do setor de {niche}:\n\n{body.news_context}\n\n"
@@ -1934,12 +1981,24 @@ async def carousel_agent_themes(body: CarouselThemesRequest, current_user: dict 
         f'{{"id":2,"title":"...","angle":"...","promise":"...","slides_count":7}},'
         f'{{"id":3,"title":"...","angle":"...","promise":"...","slides_count":5}}]'
     )
-    result = await call_llm(body.llm_provider, api_key, system, prompt)
-    try:
-        themes = _extract_json(result)
+
+    job_id = f"agentjob_{uuid.uuid4().hex[:12]}"
+    await db.carousel_agent_jobs.insert_one({
+        "job_id": job_id, "user_id": current_user["user_id"], "step": "themes",
+        "status": "pending", "result": None, "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _run():
+        text = await call_llm(body.llm_provider, api_key, system, prompt)
+        try:
+            themes = _extract_json(text)
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"O {body.llm_provider} não retornou JSON válido. Tente novamente.")
         return {"themes": themes}
-    except Exception:
-        raise HTTPException(status_code=500, detail=f"O {body.llm_provider} não retornou JSON válido. Tente novamente.")
+
+    asyncio.create_task(_run_agent_job(job_id, _run()))
+    return {"job_id": job_id, "status": "pending"}
 
 
 @api_router.post("/carousel/agent/copy")
@@ -1947,6 +2006,7 @@ async def carousel_agent_copy(body: CarouselCopyRequest, current_user: dict = De
     api_key = await _get_api_key(current_user["user_id"], body.llm_provider)
     client = await db.clients.find_one({"client_id": body.client_id}, {"_id": 0})
     niche = ((client.get("company") or client.get("name", "negócio")) if client else "negócio")
+
     system = "Você é um copywriter especialista em Instagram. Crie carrosséis altamente engajantes com ganchos poderosos e CTAs irresistíveis. Responda em português brasileiro."
     prompt = (
         f"Crie o copy completo para um carrossel sobre:\n"
@@ -1960,12 +2020,24 @@ async def carousel_agent_copy(body: CarouselCopyRequest, current_user: dict = De
         f'...,'
         f'{{"number":N,"type":"cta","title":"Ação desejada","subtitle":"Reforço","body":"Hashtags e instrução"}}]}}'
     )
-    result = await call_llm(body.llm_provider, api_key, system, prompt)
-    try:
-        copy_data = _extract_json(result)
+
+    job_id = f"agentjob_{uuid.uuid4().hex[:12]}"
+    await db.carousel_agent_jobs.insert_one({
+        "job_id": job_id, "user_id": current_user["user_id"], "step": "copy",
+        "status": "pending", "result": None, "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _run():
+        text = await call_llm(body.llm_provider, api_key, system, prompt)
+        try:
+            copy_data = _extract_json(text)
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"O {body.llm_provider} não retornou JSON válido. Tente novamente.")
         return {"copy": copy_data}
-    except Exception:
-        raise HTTPException(status_code=500, detail=f"O {body.llm_provider} não retornou JSON válido. Tente novamente.")
+
+    asyncio.create_task(_run_agent_job(job_id, _run()))
+    return {"job_id": job_id, "status": "pending"}
 
 
 async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api_key: str, client_name: str):
