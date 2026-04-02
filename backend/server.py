@@ -2040,60 +2040,159 @@ async def carousel_agent_copy(body: CarouselCopyRequest, current_user: dict = De
     return {"job_id": job_id, "status": "pending"}
 
 
-async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api_key: str, client_name: str):
+async def call_llm_with_vision_openai(
+    api_key: str,
+    system_prompt: str,
+    text_prompt: str,
+    image_b64: str,
+    image_type: str,
+) -> str:
+    message_content = [
+        {"type": "image_url", "image_url": {"url": f"data:{image_type};base64,{image_b64}", "detail": "high"}},
+        {"type": "text", "text": text_prompt},
+    ]
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message_content},
+                ],
+                "max_tokens": 4000,
+                "temperature": 0.7,
+            },
+        )
+        if r.status_code == 401:
+            raise HTTPException(status_code=400, detail="Chave OPENAI inválida. Verifique em Configurações.")
+        if not r.is_success:
+            raise HTTPException(status_code=400, detail=f"Erro OpenAI Vision ({r.status_code}): {r.text[:300]}")
+        return r.json()["choices"][0]["message"]["content"]
+
+
+async def call_llm_with_vision_gemini(
+    api_key: str,
+    system_prompt: str,
+    text_prompt: str,
+    image_b64: str,
+    image_type: str,
+) -> str:
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{
+                    "parts": [
+                        {"inline_data": {"mime_type": image_type, "data": image_b64}},
+                        {"text": f"{system_prompt}\n\n{text_prompt}"},
+                    ]
+                }],
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 4096},
+            },
+        )
+        if not r.is_success:
+            raise HTTPException(status_code=400, detail=f"Erro Gemini Vision ({r.status_code}): {r.text[:300]}")
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api_key: str, client_name: str, client_notes: str = ""):
     """Executa a geração do carrossel em background e salva o resultado no MongoDB."""
-    system = (
-        "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS puro. "
-        "Seu estilo é moderno, colorido e profissional — inspirado em Notion, Linear e Stripe. "
-        "REGRAS DE DESIGN OBRIGATÓRIAS:\n"
-        "- NUNCA use fundo preto, cinza escuro (#111, #222, #333) ou esquemas sombrios sem justificativa.\n"
-        "- Fundos sempre claros ou com gradiente colorido vibrante (azul, roxo, coral, verde, laranja).\n"
-        "- Tipografia: Google Fonts Outfit (títulos, weight 700) + Plus Jakarta Sans (corpo, weight 400).\n"
-        "- Layout limpo com espaço em branco generoso, bordas arredondadas (16-24px), sombras sutis.\n"
-        "- Texto sempre legível: branco sobre gradiente escuro, ou escuro (#1a1a2e) sobre fundo claro.\n"
-        "RETORNE APENAS O CÓDIGO HTML COMPLETO começando com <!DOCTYPE html>. Sem markdown, sem explicações."
-    )
+    has_template = bool(body.template_image_b64)
+
+    if has_template:
+        system = (
+            "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS puro. "
+            "O usuário enviou uma IMAGEM DE TEMPLATE — ela define o estilo visual que DEVE ser replicado: "
+            "paleta de cores, tipografia, layout, atmosfera e estética geral. "
+            "REGRAS OBRIGATÓRIAS:\n"
+            "- Replique FIELMENTE as cores, fontes, estilo e layout da imagem de referência\n"
+            "- Gere TODOS os slides descritos no conteúdo, mantendo o mesmo estilo visual em todos\n"
+            "- Cada slide: exatamente 1080x1080px\n"
+            "- JavaScript funcional para navegação: funções nextSlide() e prevSlide() com botões ← → no rodapé\n"
+            "- Texto legível com contraste adequado\n"
+            "RETORNE APENAS O CÓDIGO HTML COMPLETO começando com <!DOCTYPE html>. Sem markdown."
+        )
+    else:
+        style_hint = ""
+        if client_notes:
+            style_hint = (
+                f"\n=== ESTILO BASEADO NAS NOTAS DO CLIENTE ===\n"
+                f"{client_notes}\n"
+                f"Use essas informações para definir cores, tom e identidade visual do carrossel.\n"
+            )
+        system = (
+            "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS puro. "
+            "Seu estilo é moderno, colorido e profissional — inspirado em Notion, Linear e Stripe. "
+            "REGRAS DE DESIGN OBRIGATÓRIAS:\n"
+            "- NUNCA use fundo preto puro (#000, #111) — use gradiente colorido vibrante\n"
+            "- Fundos: gradiente colorido (azul, roxo, coral, verde, laranja)\n"
+            "- Tipografia: Google Fonts Outfit (títulos, 700) + Plus Jakarta Sans (corpo, 400)\n"
+            "- JavaScript funcional: funções nextSlide() e prevSlide() com botões ← → no rodapé\n"
+            "- Cada slide: exatamente 1080x1080px\n"
+            f"{style_hint}"
+            "RETORNE APENAS O CÓDIGO HTML COMPLETO começando com <!DOCTYPE html>. Sem markdown."
+        )
+
     if body.change_request and body.current_html:
         prompt = (
             f"Você gerou o carrossel HTML abaixo. O usuário pediu as seguintes alterações:\n\n"
             f"=== ALTERAÇÕES SOLICITADAS ===\n{body.change_request}\n\n"
             f"=== HTML ATUAL ===\n{body.current_html[:6000]}\n\n"
-            f"Aplique APENAS as alterações pedidas. Mantenha tudo que não foi mencionado. "
-            f"Preserve os slides, textos, estrutura de navegação e estilos gerais.\n"
-            f"Retorne APENAS o HTML completo modificado. Sem texto antes ou depois. Sem blocos markdown."
+            f"Aplique APENAS as alterações pedidas. Preserve slides, textos, estrutura de navegação e estilos.\n"
+            f"Retorne APENAS o HTML completo modificado. Sem texto antes ou depois."
         )
     else:
+        template_instruction = ""
+        if has_template:
+            template_instruction = (
+                "ATENÇÃO: A imagem acima é o TEMPLATE DE ESTILO — replique suas cores, fontes e layout em TODOS os slides.\n"
+                "NÃO copie o conteúdo da imagem. Use-a apenas como referência visual.\n\n"
+            )
         prompt = (
+            f"{template_instruction}"
             f"Crie um carrossel interativo para Instagram em HTML/CSS puro com os slides abaixo.\n\n"
             f"=== CONTEÚDO DOS SLIDES ===\n{body.copy_content}\n\n"
             f"=== CONTEXTO ===\nTema: {body.chosen_theme}\nMarca/Cliente: {client_name}\n\n"
             f"=== ESPECIFICAÇÕES TÉCNICAS ===\n"
             f"- Cada slide: exatamente 1080x1080px (quadrado Instagram)\n"
-            f"- Google Fonts: importe Outfit (wght@600;700) e Plus Jakarta Sans (wght@400;500) via CDN\n"
+            f"- Google Fonts: Outfit (wght@600;700) + Plus Jakarta Sans (wght@400;500) via CDN\n"
             f"- Títulos: Outfit, 52-72px, font-weight 700\n"
-            f"- Corpo: Plus Jakarta Sans, 24-30px, font-weight 400, line-height 1.6\n"
-            f"- Todo CSS no <style> interno do <head>\n"
-            f"- JavaScript funcional para navegação entre slides (mostrar slide ativo, esconder os demais)\n\n"
-            f"=== DESIGN OBRIGATÓRIO ===\n"
-            f"- PROIBIDO: fundo preto puro, #000, #111 — use sempre cor ou gradiente\n"
-            f"- Slide CAPA: gradiente diagonal vibrante (ex: #667eea→#764ba2 ou #f093fb→#f5576c), "
-            f"título centralizado em branco, 64-72px, subtítulo abaixo\n"
-            f"- Slides CONTEÚDO: fundo branco ou gradiente claro, título em azul escuro (#1a1a2e) ou roxo, "
-            f"borda colorida à esquerda (4px sólida), número do slide em destaque\n"
-            f"- Slide CTA: gradiente forte, botão de ação grande com border-radius 50px e sombra proeminente\n"
-            f"- Navegação: botões ← → no rodapé, contador 'Slide X de N' centralizado\n"
-            f"- Cards com border-radius 16px e box-shadow: 0 4px 20px rgba(0,0,0,0.1)\n\n"
-            f"Retorne APENAS o HTML completo. Sem texto antes ou depois. Sem blocos markdown."
+            f"- Corpo: Plus Jakarta Sans, 24-30px, font-weight 400\n"
+            f"- CRÍTICO: Funções JavaScript nextSlide() e prevSlide() DEVEM existir no código\n"
+            f"- Botões ← e → no rodapé de cada slide para navegação\n"
+            f"- Contador 'Slide X de N' visível\n"
+            f"- Todo CSS no <style> interno do <head>\n\n"
+            f"=== DESIGN ===\n"
+            f"- Slide CAPA: gradiente diagonal vibrante, título 64-72px centralizado em branco\n"
+            f"- Slides CONTEÚDO: borda colorida à esquerda (4px), número do slide em destaque\n"
+            f"- Slide CTA: gradiente forte, botão de ação grande com border-radius 50px\n"
+            f"Retorne APENAS o HTML completo."
         )
     try:
-        if body.template_image_b64 and body.llm_provider == "anthropic":
-            result = await call_llm_with_vision_anthropic(
-                api_key=api_key,
-                system_prompt=system,
-                text_prompt=prompt,
-                image_b64=body.template_image_b64,
-                image_type=body.template_image_type or "image/jpeg",
-            )
+        if has_template:
+            img_b64 = body.template_image_b64
+            img_type = body.template_image_type or "image/jpeg"
+            if body.llm_provider == "anthropic":
+                result = await call_llm_with_vision_anthropic(
+                    api_key=api_key, system_prompt=system, text_prompt=prompt,
+                    image_b64=img_b64, image_type=img_type,
+                )
+            elif body.llm_provider == "openai":
+                result = await call_llm_with_vision_openai(
+                    api_key=api_key, system_prompt=system, text_prompt=prompt,
+                    image_b64=img_b64, image_type=img_type,
+                )
+            elif body.llm_provider == "gemini":
+                result = await call_llm_with_vision_gemini(
+                    api_key=api_key, system_prompt=system, text_prompt=prompt,
+                    image_b64=img_b64, image_type=img_type,
+                )
+            else:
+                # Groq/Perplexity: no vision support, fallback to text with style hint in prompt
+                result = await call_llm(body.llm_provider, api_key, system, prompt)
         else:
             result = await call_llm(body.llm_provider, api_key, system, prompt)
 
@@ -2133,6 +2232,7 @@ async def carousel_agent_design(body: CarouselDesignRequest, current_user: dict 
     api_key = await _get_api_key(current_user["user_id"], body.llm_provider)
     client = await db.clients.find_one({"client_id": body.client_id}, {"_id": 0})
     client_name = client.get("name", "Cliente") if client else "Cliente"
+    client_notes = (client.get("notes") or "") if client else ""
 
     job_id = f"carjob_{uuid.uuid4().hex[:12]}"
     await db.carousel_jobs.insert_one({
@@ -2144,7 +2244,7 @@ async def carousel_agent_design(body: CarouselDesignRequest, current_user: dict 
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
-    asyncio.create_task(_run_carousel_design_job(job_id, body, api_key, client_name))
+    asyncio.create_task(_run_carousel_design_job(job_id, body, api_key, client_name, client_notes))
 
     return {"job_id": job_id, "status": "pending"}
 
