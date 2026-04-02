@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   Users,
   Kanban,
-  UserCheck,
   DollarSign,
   Image,
   ClipboardList,
@@ -14,68 +13,25 @@ import {
   Settings,
   X,
   ChevronDown,
-  ChevronRight,
   Building2,
 } from "lucide-react";
 
 const navItems = [
+  { label: "Dashboard",    icon: LayoutDashboard, href: "/dashboard",       testId: "nav-dashboard" },
   {
-    label: "Dashboard",
-    icon: LayoutDashboard,
-    href: "/dashboard",
-    testId: "nav-dashboard",
-  },
-  {
-    label: "Comercial",
-    icon: Kanban,
-    testId: "nav-comercial",
+    label: "Comercial", icon: Kanban, testId: "nav-comercial",
     children: [
-      { label: "Leads", href: "/comercial/leads", testId: "nav-leads" },
+      { label: "Leads",    href: "/comercial/leads",    testId: "nav-leads" },
       { label: "Pipeline", href: "/comercial/pipeline", testId: "nav-pipeline" },
     ],
   },
-  {
-    label: "Clientes",
-    icon: Users,
-    href: "/clientes",
-    testId: "nav-clientes",
-  },
-  {
-    label: "Financeiro",
-    icon: DollarSign,
-    href: "/financeiro",
-    testId: "nav-financeiro",
-  },
-  {
-    label: "Operacional",
-    icon: ClipboardList,
-    href: "/operacional",
-    testId: "nav-operacional",
-  },
-  {
-    label: "Conteúdo",
-    icon: Image,
-    href: "/conteudo",
-    testId: "nav-conteudo",
-  },
-  {
-    label: "WhatsApp",
-    icon: MessageCircle,
-    href: "/whatsapp",
-    testId: "nav-whatsapp",
-  },
-  {
-    label: "RH",
-    icon: UserCog,
-    href: "/rh",
-    testId: "nav-rh",
-  },
-  {
-    label: "Configurações",
-    icon: Settings,
-    href: "/configuracoes",
-    testId: "nav-configuracoes",
-  },
+  { label: "Clientes",     icon: Users,           href: "/clientes",        testId: "nav-clientes" },
+  { label: "Financeiro",   icon: DollarSign,      href: "/financeiro",      testId: "nav-financeiro" },
+  { label: "Operacional",  icon: ClipboardList,   href: "/operacional",     testId: "nav-operacional" },
+  { label: "Conteúdo",     icon: Image,           href: "/conteudo",        testId: "nav-conteudo" },
+  { label: "WhatsApp",     icon: MessageCircle,   href: "/whatsapp",        testId: "nav-whatsapp" },
+  { label: "RH",           icon: UserCog,         href: "/rh",              testId: "nav-rh" },
+  { label: "Configurações",icon: Settings,        href: "/configuracoes",   testId: "nav-configuracoes" },
 ];
 
 function NavItem({ item, onClose }) {
@@ -85,22 +41,26 @@ function NavItem({ item, onClose }) {
     return (
       <div>
         <button
-          onClick={() => setOpen(!open)}
-          className={cn(
-            "nav-item w-full",
-          )}
+          onClick={() => setOpen(v => !v)}
+          className="nav-item"
           data-testid={item.testId}
+          style={{ justifyContent: "flex-start" }}
         >
           <item.icon size={18} strokeWidth={1.75} className="shrink-0" />
           <span className="flex-1 text-left">{item.label}</span>
-          <span className="transition-transform duration-200" style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)" }}>
-            <ChevronDown size={14} strokeWidth={1.75} />
-          </span>
+          <ChevronDown
+            size={14}
+            strokeWidth={2}
+            style={{ transition: "transform 0.2s ease", transform: open ? "rotate(0deg)" : "rotate(-90deg)", opacity: 0.6 }}
+          />
         </button>
 
         {open && (
-          <div className="mt-0.5 ml-4 pl-3 border-l border-border space-y-0.5">
-            {item.children.map((child) => (
+          <div
+            className="mt-1 ml-4 space-y-0.5"
+            style={{ paddingLeft: "12px", borderLeft: "1px solid hsl(var(--sidebar-border))" }}
+          >
+            {item.children.map(child => (
               <NavLink
                 key={child.href}
                 to={child.href}
@@ -108,12 +68,11 @@ function NavItem({ item, onClose }) {
                 data-testid={child.testId}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-200",
-                    isActive
-                      ? "nav-item-active"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground font-medium"
+                    "nav-item",
+                    isActive && "nav-item-active"
                   )
                 }
+                style={{ fontSize: "13.5px" }}
               >
                 {child.label}
               </NavLink>
@@ -129,9 +88,7 @@ function NavItem({ item, onClose }) {
       to={item.href}
       onClick={onClose}
       data-testid={item.testId}
-      className={({ isActive }) =>
-        cn("nav-item", isActive && "nav-item-active")
-      }
+      className={({ isActive }) => cn("nav-item", isActive && "nav-item-active")}
     >
       <item.icon size={18} strokeWidth={1.75} className="shrink-0" />
       <span>{item.label}</span>
@@ -141,25 +98,41 @@ function NavItem({ item, onClose }) {
 
 export default function Sidebar({ onClose }) {
   return (
-    <div className="flex flex-col h-full" style={{ background: "hsl(var(--sidebar-bg))" }}>
+    <div
+      className="flex flex-col h-full"
+      style={{ background: "hsl(var(--sidebar-bg))", borderRight: "1px solid hsl(var(--sidebar-border))" }}
+    >
       {/* Logo */}
-      <div className="flex items-center justify-between h-16 px-5 shrink-0 border-b border-border">
+      <div
+        className="flex items-center justify-between shrink-0 px-5"
+        style={{ height: "60px", borderBottom: "1px solid hsl(var(--sidebar-border))" }}
+      >
         <div className="flex items-center gap-3">
           <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: "linear-gradient(135deg, hsl(var(--primary)), hsl(252 100% 60%))" }}
+            className="flex items-center justify-center w-8 h-8 rounded-lg shrink-0"
+            style={{ background: "linear-gradient(135deg, #1D4ED8, #3B82F6)" }}
           >
-            <Building2 size={16} strokeWidth={2} className="text-white" />
+            <Building2 size={16} strokeWidth={2} color="#fff" />
           </div>
           <div className="flex flex-col leading-tight">
-            <span className="font-heading font-bold text-sm tracking-tight text-foreground">AgênciaOS</span>
-            <span className="text-[10px] text-muted-foreground font-medium">Painel de Gestão</span>
+            <span
+              className="font-heading font-bold tracking-tight"
+              style={{ fontSize: "15px", color: "hsl(var(--foreground))" }}
+            >
+              AgênciaOS
+            </span>
+            <span style={{ fontSize: "11px", color: "hsl(var(--sidebar-item-normal-text))", letterSpacing: "0.2px" }}>
+              Painel de Gestão
+            </span>
           </div>
         </div>
         {onClose && (
           <button
             onClick={onClose}
-            className="p-1.5 rounded-md hover:bg-muted transition-colors md:hidden"
+            className="md:hidden p-1.5 rounded-md"
+            style={{ color: "hsl(var(--sidebar-item-normal-text))", transition: "background 0.2s ease" }}
+            onMouseEnter={e => e.currentTarget.style.background = "hsl(var(--sidebar-item-hover-bg))"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}
             data-testid="sidebar-close"
           >
             <X size={16} />
@@ -167,19 +140,25 @@ export default function Sidebar({ onClose }) {
         )}
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-5 space-y-1 overflow-y-auto scrollbar-hidden">
-        {navItems.map((item) => (
+      {/* Nav */}
+      <nav
+        className="flex-1 overflow-y-auto scrollbar-hidden"
+        style={{ padding: "12px 10px", display: "flex", flexDirection: "column", gap: "2px" }}
+      >
+        {navItems.map(item => (
           <NavItem key={item.testId} item={item} onClose={onClose} />
         ))}
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-border shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <p className="text-xs text-muted-foreground font-medium">v2.0 — Tudo operacional</p>
-        </div>
+      <div
+        className="shrink-0 px-4 py-3 flex items-center gap-2"
+        style={{ borderTop: "1px solid hsl(var(--sidebar-border))" }}
+      >
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        <span style={{ fontSize: "12px", color: "hsl(var(--sidebar-item-normal-text))", letterSpacing: "0.2px" }}>
+          v2.0 — Tudo operacional
+        </span>
       </div>
     </div>
   );
