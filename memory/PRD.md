@@ -30,7 +30,14 @@ Extração e execução do arquivo `atualização recente da recente.rar`:
 - Arquivos recriados: Sidebar.jsx, AuthCallback.jsx, sonner.jsx, dialog.jsx, collapsible.jsx, hover-card.jsx, pagination.jsx, slider.jsx, toggle.jsx, taskConfig.js
 - Dependências instaladas: framer-motion, @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities, httpx
 
-### Tarefa 1 — Instagram API Settings (Abr/2026)
+### UI/UX Modernization (Abr/2026)
+- `index.css`: CSS vars atualizados (background off-white hsl(210 40% 97.5%), cards brancos), sidebar vars dedicadas, utilities `.nav-item`, `.nav-item-active`, `.card-elevated`, `.page-container`, `.status-success/error/warning`, animações `fade-up`/`fade-in`
+- `Sidebar.jsx`: Logo gradiente + Building2 icon, active item com borda lateral azul + bg azul claro, subitems com linha indentada, espaçamento `space-y-1`, footer com pulse verde
+- `Layout.jsx`: Header com divider, avatar com ring, ChevronDown no user menu, backdrop-blur
+- `button.jsx`: `active:scale-[0.97]`, `transition-all duration-200`, `rounded-lg` padrão, hover shadow
+- `card.jsx`: CardTitle usa `font-heading`, shadow suave
+- `input.jsx`: `rounded-lg`, `focus-visible:ring-2 focus-visible:ring-primary/30`
+- `badge.jsx`: Novos variants `success`, `warning`, `solid`
 - Backend: `InstagramApiSettings` model + `GET/PUT /api/settings/instagram-api`
 - page_access_token mascarado no GET (****last4)
 - Frontend: `InstagramApiSection` em Configuracoes.jsx
