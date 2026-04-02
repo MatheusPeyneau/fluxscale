@@ -2098,22 +2098,76 @@ async def call_llm_with_vision_gemini(
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api_key: str, client_name: str, client_notes: str = ""):
-    """Executa a geração do carrossel em background e salva o resultado no MongoDB."""
-    has_template = bool(body.template_image_b64)
+    # ──────────────────────────────────────────────────────────────────
+    # MANDATORY JS TEMPLATE — included verbatim in every prompt
+    # ──────────────────────────────────────────────────────────────────
+    JS_TEMPLATE = """
+<script>
+(function() {
+  var slides = document.querySelectorAll('.slide');
+  var total   = slides.length;
+  var current = 0;
+
+  function goTo(n) {
+    slides[current].classList.remove('active');
+    current = ((n % total) + total) % total;
+    slides[current].classList.add('active');
+    updateNav();
+  }
+
+  function updateNav() {
+    var counter = document.querySelector('.slide-counter');
+    if (counter) counter.textContent = (current + 1) + ' / ' + total;
+    document.querySelectorAll('.dot').forEach(function(d, i) {
+      d.classList.toggle('active', i === current);
+    });
+  }
+
+  var prevBtn = document.querySelector('.prev');
+  var nextBtn = document.querySelector('.next');
+  if (prevBtn) prevBtn.addEventListener('click', function() { goTo(current - 1); });
+  if (nextBtn) nextBtn.addEventListener('click', function() { goTo(current + 1); });
+
+  document.querySelectorAll('.dot').forEach(function(d, i) {
+    d.addEventListener('click', function() { goTo(i); });
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.action === 'carousel-next') goTo(current + 1);
+    if (e.data && e.data.action === 'carousel-prev') goTo(current - 1);
+  });
+
+  window.nextSlide = function() { goTo(current + 1); };
+  window.prevSlide = function() { goTo(current - 1); };
+  window.goTo      = goTo;
+
+  goTo(0);
+})();
+</script>"""
+
+    NAV_HINT = (
+        "ESTRUTURA OBRIGATÓRIA DE CADA SLIDE:\n"
+        "  <div class=\"slide\">  ← class EXATAMENTE 'slide'\n"
+        "    <!-- conteúdo -->\n"
+        "    <button class=\"prev\">←</button>\n"
+        "    <span class=\"slide-counter\"></span>\n"
+        "    <button class=\"next\">→</button>\n"
+        "  </div>\n\n"
+        "SCRIPT OBRIGATÓRIO antes do </body>:\n"
+        + JS_TEMPLATE +
+        "\n⚠ NUNCA omita este script. Sem ele os slides não trocam."
+    )
 
     if has_template:
         system = (
-            "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS puro. "
-            "O usuário enviou uma IMAGEM DE TEMPLATE — ela define o estilo visual que DEVE ser replicado: "
-            "paleta de cores, tipografia, layout, atmosfera e estética geral. "
-            "REGRAS OBRIGATÓRIAS:\n"
-            "- Replique FIELMENTE as cores, fontes, estilo e layout da imagem de referência\n"
-            "- Gere TODOS os slides descritos no conteúdo, mantendo o mesmo estilo visual em todos\n"
-            "- Cada slide: exatamente 1080x1080px\n"
-            "- JavaScript funcional para navegação: funções nextSlide() e prevSlide() com botões ← → no rodapé\n"
+            "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS/JS. "
+            "O usuário enviou uma IMAGEM DE TEMPLATE — replique FIELMENTE: paleta, tipografia, layout e atmosfera. "
+            "REGRAS ABSOLUTAS:\n"
+            "- Replique as cores, fontes e layout da imagem de referência em TODOS os slides\n"
+            "- Cada slide: exatamente 1080x1080px, class='slide'\n"
+            "- INCLUA o script de navegação obrigatório conforme especificado no prompt\n"
             "- Texto legível com contraste adequado\n"
-            "RETORNE APENAS O CÓDIGO HTML COMPLETO começando com <!DOCTYPE html>. Sem markdown."
+            "RETORNE APENAS O CÓDIGO HTML COMPLETO. Sem markdown."
         )
     else:
         style_hint = ""
@@ -2121,19 +2175,17 @@ async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api
             style_hint = (
                 f"\n=== ESTILO BASEADO NAS NOTAS DO CLIENTE ===\n"
                 f"{client_notes}\n"
-                f"Use essas informações para definir cores, tom e identidade visual do carrossel.\n"
+                f"Use essas informações para definir cores, tom e identidade visual.\n"
             )
         system = (
-            "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS puro. "
-            "Seu estilo é moderno, colorido e profissional — inspirado em Notion, Linear e Stripe. "
-            "REGRAS DE DESIGN OBRIGATÓRIAS:\n"
-            "- NUNCA use fundo preto puro (#000, #111) — use gradiente colorido vibrante\n"
-            "- Fundos: gradiente colorido (azul, roxo, coral, verde, laranja)\n"
-            "- Tipografia: Google Fonts Outfit (títulos, 700) + Plus Jakarta Sans (corpo, 400)\n"
-            "- JavaScript funcional: funções nextSlide() e prevSlide() com botões ← → no rodapé\n"
-            "- Cada slide: exatamente 1080x1080px\n"
+            "Você é um designer senior de carrosséis para Instagram, especialista em HTML/CSS/JS. "
+            "Estilo moderno e profissional.\n"
+            "REGRAS ABSOLUTAS:\n"
+            "- NUNCA use fundo preto puro — use gradientes coloridos vibrantes\n"
+            "- Cada slide: exatamente 1080x1080px, class='slide'\n"
+            "- INCLUA o script de navegação obrigatório conforme especificado no prompt\n"
             f"{style_hint}"
-            "RETORNE APENAS O CÓDIGO HTML COMPLETO começando com <!DOCTYPE html>. Sem markdown."
+            "RETORNE APENAS O CÓDIGO HTML COMPLETO. Sem markdown."
         )
 
     if body.change_request and body.current_html:
@@ -2141,7 +2193,8 @@ async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api
             f"Você gerou o carrossel HTML abaixo. O usuário pediu as seguintes alterações:\n\n"
             f"=== ALTERAÇÕES SOLICITADAS ===\n{body.change_request}\n\n"
             f"=== HTML ATUAL ===\n{body.current_html[:6000]}\n\n"
-            f"Aplique APENAS as alterações pedidas. Preserve slides, textos, estrutura de navegação e estilos.\n"
+            f"Aplique APENAS as alterações pedidas. Preserve slides, textos e estilos.\n"
+            f"OBRIGATÓRIO: mantenha o script de navegação abaixo antes do </body>:\n{JS_TEMPLATE}\n"
             f"Retorne APENAS o HTML completo modificado. Sem texto antes ou depois."
         )
     else:
@@ -2153,7 +2206,7 @@ async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api
             )
         prompt = (
             f"{template_instruction}"
-            f"Crie um carrossel interativo para Instagram em HTML/CSS puro com os slides abaixo.\n\n"
+            f"Crie um carrossel interativo para Instagram em HTML/CSS/JS com os slides abaixo.\n\n"
             f"=== CONTEÚDO DOS SLIDES ===\n{body.copy_content}\n\n"
             f"=== CONTEXTO ===\nTema: {body.chosen_theme}\nMarca/Cliente: {client_name}\n\n"
             f"=== ESPECIFICAÇÕES TÉCNICAS ===\n"
@@ -2161,15 +2214,13 @@ async def _run_carousel_design_job(job_id: str, body: CarouselDesignRequest, api
             f"- Google Fonts: Outfit (wght@600;700) + Plus Jakarta Sans (wght@400;500) via CDN\n"
             f"- Títulos: Outfit, 52-72px, font-weight 700\n"
             f"- Corpo: Plus Jakarta Sans, 24-30px, font-weight 400\n"
-            f"- CRÍTICO: Funções JavaScript nextSlide() e prevSlide() DEVEM existir no código\n"
-            f"- Botões ← e → no rodapé de cada slide para navegação\n"
-            f"- Contador 'Slide X de N' visível\n"
             f"- Todo CSS no <style> interno do <head>\n\n"
+            f"=== NAVEGAÇÃO OBRIGATÓRIA ===\n{NAV_HINT}\n\n"
             f"=== DESIGN ===\n"
             f"- Slide CAPA: gradiente diagonal vibrante, título 64-72px centralizado em branco\n"
             f"- Slides CONTEÚDO: borda colorida à esquerda (4px), número do slide em destaque\n"
             f"- Slide CTA: gradiente forte, botão de ação grande com border-radius 50px\n"
-            f"Retorne APENAS o HTML completo."
+            f"Retorne APENAS o HTML completo começando com <!DOCTYPE html>."
         )
     try:
         if has_template:
